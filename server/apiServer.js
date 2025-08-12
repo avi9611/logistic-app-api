@@ -128,14 +128,24 @@ app.delete('/orders/:id', async (req, res) => {
 app.post('/simulate', async (req, res) => {
   try {
     const { drivers, startTime, maxHoursPerDay } = req.body;
+    // Input validation
     if (
       drivers == null ||
       !startTime ||
       maxHoursPerDay == null ||
+      typeof drivers !== "number" ||
+      typeof maxHoursPerDay !== "number" ||
       drivers <= 0 ||
-      maxHoursPerDay <= 0
+      maxHoursPerDay <= 0 ||
+      drivers > 100 // Arbitrary upper limit for sanity
     ) {
-      return res.status(400).json({ error: 'Invalid or missing simulation parameters' });
+      return res.status(400).json({
+        error: {
+          code: "INVALID_PARAMS",
+          message: "Invalid or missing simulation parameters",
+          details: { drivers, startTime, maxHoursPerDay }
+        }
+      });
     }
 
     // Fetch all orders, routes, and drivers
@@ -143,21 +153,52 @@ app.post('/simulate', async (req, res) => {
     const allRoutes = await prisma.route.findMany();
     const allDrivers = await prisma.driver.findMany();
 
-    // --- Simulation Logic (simplified for brevity) ---
-    // Apply company rules and calculate KPIs
+    // Reallocate orders to available drivers (round-robin)
+    let assignedDrivers = allDrivers.slice(0, drivers);
+    if (assignedDrivers.length < drivers) {
+      return res.status(400).json({
+        error: {
+          code: "DRIVER_COUNT_EXCEEDS_AVAILABLE",
+          message: "Requested driver count exceeds available drivers",
+          details: { availableDrivers: allDrivers.length }
+        }
+      });
+    }
+
+    // Simulate driver fatigue and allocation
+    let driverWorkHours = assignedDrivers.map(() => 0);
+    let driverFatigue = assignedDrivers.map(() => false);
+
     let onTimeDeliveries = 0;
     let totalDeliveries = allOrders.length;
     let totalProfit = 0;
-    let efficiencyScore = 0;
 
-    for (const order of allOrders) {
+    let orderResults = [];
+
+    for (let i = 0; i < allOrders.length; i++) {
+      const order = allOrders[i];
       const route = allRoutes.find(r => r.routeId === order.routeId);
       if (!route) continue;
 
-      // Calculate delivery time and penalties
-      const baseDeliveryTime = route.baseTime;
-      const actualDeliveryTime = baseDeliveryTime + (route.traffic === "High" ? 15 : 5);
-      const isLate = new Date(order.deliveryTimestamp).getMinutes() > baseDeliveryTime + 10;
+      // Assign driver (round-robin)
+      let driverIdx = i % assignedDrivers.length;
+      let driver = assignedDrivers[driverIdx];
+
+      // Simulate fatigue: if driver worked >8h yesterday, speed -30% today
+      let fatigue = driverFatigue[driverIdx];
+      let baseDeliveryTime = route.baseTime;
+      let deliveryTime = baseDeliveryTime + (route.traffic === "High" ? 15 : 5);
+
+      if (driverWorkHours[driverIdx] > 8) {
+        fatigue = true;
+        deliveryTime = Math.ceil(deliveryTime * 1.3);
+      }
+
+      // Update work hours for driver
+      driverWorkHours[driverIdx] += deliveryTime / 60; // convert minutes to hours
+
+      // Late delivery penalty
+      let isLate = deliveryTime > (baseDeliveryTime + 10);
       let penalty = isLate ? 50 : 0;
 
       // Fuel cost
@@ -173,19 +214,41 @@ app.post('/simulate', async (req, res) => {
       totalProfit += profit;
 
       if (!isLate) onTimeDeliveries++;
+
+      orderResults.push({
+        orderId: order.orderId,
+        assignedDriverId: driver.id,
+        isLate,
+        penalty,
+        bonus,
+        fuelCost,
+        profit,
+        fatigueApplied: fatigue
+      });
+
+      // Fatigue rule for next day
+      driverFatigue[driverIdx] = driverWorkHours[driverIdx] > 8;
+      // Reset work hours if maxHoursPerDay exceeded
+      if (driverWorkHours[driverIdx] > maxHoursPerDay) driverWorkHours[driverIdx] = 0;
     }
 
-    efficiencyScore = totalDeliveries > 0 ? (onTimeDeliveries / totalDeliveries) * 100 : 0;
+    let efficiencyScore = totalDeliveries > 0 ? (onTimeDeliveries / totalDeliveries) * 100 : 0;
 
     res.json({
       totalProfit,
       efficiencyScore,
       onTimeDeliveries,
       totalDeliveries,
+      orderResults,
       error: null
     });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(400).json({
+      error: {
+        code: "SIMULATION_ERROR",
+        message: e.message
+      }
+    });
   }
 });
 
