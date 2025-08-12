@@ -285,7 +285,7 @@ app.post('/simulate', async (req, res) => {
       typeof maxHoursPerDay !== "number" ||
       drivers <= 0 ||
       maxHoursPerDay <= 0 ||
-      drivers > 100 // Arbitrary upper limit for sanity
+      drivers > 100 
     ) {
       return res.status(400).json({
         error: {
@@ -343,7 +343,7 @@ app.post('/simulate', async (req, res) => {
       }
 
       // Update work hours for driver
-      driverWorkHours[driverIdx] += deliveryTime / 60; // convert minutes to hours
+      driverWorkHours[driverIdx] += deliveryTime / 60; 
 
       // Late delivery penalty
       let isLate = deliveryTime > (baseDeliveryTime + 10);
