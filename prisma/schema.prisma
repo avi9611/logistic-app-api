@@ -18,3 +18,32 @@ model User {
 
   @@map("users")
 }
+
+model Driver {
+  id        String   @id @default(cuid())
+  name      String
+  shiftHours Int
+  workHours7d Int[]
+  createdAt DateTime @default(now())
+}
+
+model Route {
+  id        String   @id @default(cuid())
+  routeId   String   @unique
+  name      String
+  distance  Float
+  traffic   String
+  baseTime  Int
+  createdAt DateTime @default(now())
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  orderId   String   @unique
+  valueRs   Float
+  routeId   String
+  deliveryTimestamp DateTime
+  assignedDriverId String?
+  status    String
+  createdAt DateTime @default(now())
+}
