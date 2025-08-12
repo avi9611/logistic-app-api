@@ -126,6 +126,44 @@ app.delete('/orders/:id', async (req, res) => {
 
 // --- Simulation Endpoint ---
 app.post('/simulate', async (req, res) => {
+
+// --- Simulation History Endpoints ---
+app.post('/simulation-history', async (req, res) => {
+  try {
+    const { userId, config, kpis, totals } = req.body;
+    if (!userId || !config || !kpis || !totals) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const history = await prisma.simulationHistory.create({
+      data: {
+        userId,
+        config,
+        kpis,
+        totals,
+      },
+    });
+    res.json(history);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/simulation-history', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing userId' });
+    }
+    const history = await prisma.simulationHistory.findMany({
+      where: { userId },
+      orderBy: { timestamp: 'desc' },
+    });
+    res.json(history);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
   try {
     const { drivers, startTime, maxHoursPerDay } = req.body;
     // Input validation

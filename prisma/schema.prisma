@@ -15,6 +15,7 @@ model User {
   username  String   @unique
   password  String
   createdAt DateTime @default(now())
+  simulationHistory SimulationHistory[]
 
   @@map("users")
 }
@@ -46,4 +47,14 @@ model Order {
   assignedDriverId String?
   status    String
   createdAt DateTime @default(now())
+}
+model SimulationHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  timestamp DateTime @default(now())
+  config    Json
+  kpis      Json
+  totals    Json
+  user      User     @relation(fields: [userId], references: [id])
+  @@map("simulation_history")
 }
