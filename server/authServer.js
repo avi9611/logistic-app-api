@@ -2,56 +2,104 @@
 require('dotenv').config();
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const { PrismaClient } = require('@prisma/client');
 
+const prisma = new PrismaClient();
 const app = express();
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// MongoDB connection
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
-
-// User schema/model
-const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true },
-  password: String,
-});
-const User = mongoose.model('User', userSchema);
-
+// Register endpoint
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
+
   try {
-    const existing = await User.findOne({ username });
-    if (existing) {
-      return res.status(400).json({ message: 'User already exists' });
+    // Validate input
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required' });
     }
-    await User.create({ username, password });
-    res.json({ message: 'Registration successful' });
+
+    // Check if user exists
+    const existing = await prisma.user.findUnique({
+      where: { username }
+    });
+
+    if (existing) {
+      return res.status(400).json({ message: 'Username already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    await prisma.user.create({
+      data: {
+        username,
+        password: hashedPassword
+      }
+    });
+
+    res.status(201).json({ message: 'Registration successful' });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Registration error:', err);
+    res.status(500).json({ message: 'Internal server error' });
   }
 });
 
+// Login endpoint
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
+
   try {
-    const user = await User.findOne({ username, password });
+    // Validate input
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required' });
+    }
+
+    // Find user
+    const user = await prisma.user.findUnique({
+      where: { username }
+    });
+
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-    const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token });
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate token
+    const token = jwt.sign(
+      { userId: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+
+    res.json({ token, username: user.username });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Login error:', err);
+    res.status(500).json({ message: 'Internal server error' });
   }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something broke!' });
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await prisma.$disconnect();
+  process.exit(0);
 });
 
 app.listen(PORT, () => {
