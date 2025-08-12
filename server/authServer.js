@@ -44,7 +44,14 @@ app.post('/api/register', async (req, res) => {
       }
     });
 
-    res.status(201).json({ message: 'Registration successful' });
+    // Generate token for new user
+    const user = await prisma.user.findUnique({ where: { username } });
+    const token = jwt.sign(
+      { userId: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+    res.status(201).json({ message: 'Registration successful', token, username: user.username });
   } catch (err) {
     console.error('Registration error:', err);
     res.status(500).json({ message: 'Internal server error' });
