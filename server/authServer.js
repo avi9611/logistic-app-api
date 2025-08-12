@@ -16,21 +16,27 @@ app.use(express.json());
 
 // Register endpoint
 app.post('/api/register', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, email, password } = req.body;
 
   try {
     // Validate input
-    if (!username || !password) {
-      return res.status(400).json({ message: 'Username and password are required' });
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: 'Username, email, and password are required' });
     }
 
     // Check if user exists
-    const existing = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findUnique({
       where: { username }
     });
+    const existingEmail = await prisma.user.findUnique({
+      where: { email }
+    });
 
-    if (existing) {
+    if (existingUser) {
       return res.status(400).json({ message: 'Username already exists' });
+    }
+    if (existingEmail) {
+      return res.status(400).json({ message: 'Email already exists' });
     }
 
     // Hash password
@@ -40,18 +46,19 @@ app.post('/api/register', async (req, res) => {
     await prisma.user.create({
       data: {
         username,
+        email,
         password: hashedPassword
       }
     });
 
     // Generate token for new user
-    const user = await prisma.user.findUnique({ where: { username } });
+    const user = await prisma.user.findUnique({ where: { email } });
     const token = jwt.sign(
-      { userId: user.id, username: user.username },
+      { userId: user.id, username: user.username, email: user.email },
       JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
-    res.status(201).json({ message: 'Registration successful', token, username: user.username });
+    res.status(201).json({ message: 'Registration successful', token, username: user.username, email: user.email });
   } catch (err) {
     console.error('Registration error:', err);
     res.status(500).json({ message: 'Internal server error' });
@@ -60,17 +67,17 @@ app.post('/api/register', async (req, res) => {
 
 // Login endpoint
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
 
   try {
     // Validate input
-    if (!username || !password) {
-      return res.status(400).json({ message: 'Username and password are required' });
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
     }
 
     // Find user
     const user = await prisma.user.findUnique({
-      where: { username }
+      where: { email }
     });
 
     if (!user) {
@@ -85,12 +92,12 @@ app.post('/api/login', async (req, res) => {
 
     // Generate token
     const token = jwt.sign(
-      { userId: user.id, username: user.username },
+      { userId: user.id, username: user.username, email: user.email },
       JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
 
-    res.json({ token, username: user.username });
+    res.json({ token, username: user.username, email: user.email });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ message: 'Internal server error' });
