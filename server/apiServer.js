@@ -1,13 +1,110 @@
+// src/server/authServer.js
+require('dotenv').config();
 const express = require('express');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
-const bodyParser = require('body-parser');
 
 const prisma = new PrismaClient();
 const app = express();
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
-// --- CRUD Endpoints ---
+app.use(cors());
+app.use(express.json());
 
+// Register endpoint
+app.post('/api/register', async (req, res) => {
+  const { username, email, password } = req.body;
+
+  try {
+    // Validate input
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: 'Username, email, and password are required' });
+    }
+
+    // Check if user exists
+    const existingUser = await prisma.user.findUnique({
+      where: { username }
+    });
+    const existingEmail = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ message: 'Username already exists' });
+    }
+    if (existingEmail) {
+      return res.status(400).json({ message: 'Email already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashedPassword
+      }
+    });
+
+    // Generate token for new user
+    const user = await prisma.user.findUnique({ where: { email } });
+    const token = jwt.sign(
+      { userId: user.id, username: user.username, email: user.email },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+    res.status(201).json({ message: 'Registration successful', token, username: user.username, email: user.email });
+  } catch (err) {
+    console.error('Registration error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Login endpoint
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    // Find user
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate token
+    const token = jwt.sign(
+      { userId: user.id, username: user.username, email: user.email },
+      JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+
+    res.json({ token, username: user.username, email: user.email });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// --- API Server Routes ---
 // Drivers
 app.get('/drivers', async (req, res) => {
   const drivers = await prisma.driver.findMany();
@@ -124,15 +221,24 @@ app.delete('/orders/:id', async (req, res) => {
   }
 });
 
-// --- Simulation Endpoint ---
-app.post('/simulate', async (req, res) => {
-
-// --- Simulation History Endpoints ---
+// Simulation History Endpoints
 app.post('/simulation-history', async (req, res) => {
   try {
-    const { userId, config, kpis, totals } = req.body;
-    if (!userId || !config || !kpis || !totals) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const { userId, config, kpis, totals, timestamp } = req.body;
+    if (
+      userId === undefined || userId === null ||
+      config === undefined || config === null ||
+      kpis === undefined || kpis === null ||
+      totals === undefined || totals === null
+    ) {
+      console.error("Field check failed:", {
+        userId: userId,
+        config: config,
+        kpis: kpis,
+        totals: totals,
+        timestamp: timestamp
+      });
+      return res.status(400).json({ error: 'Missing required fields', received: req.body });
     }
     const history = await prisma.simulationHistory.create({
       data: {
@@ -140,11 +246,13 @@ app.post('/simulation-history', async (req, res) => {
         config,
         kpis,
         totals,
+        timestamp: new Date(timestamp),
       },
     });
     res.json(history);
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    console.error("Prisma create error:", e);
+    res.status(400).json({ error: e.message, details: e });
   }
 });
 
@@ -164,6 +272,20 @@ app.get('/simulation-history', async (req, res) => {
   }
 });
 
+// Delete Simulation History Entry
+app.delete('/simulation-history/:id', async (req, res) => {
+  try {
+    await prisma.simulationHistory.delete({
+      where: { id: req.params.id }
+    });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Simulation Endpoint
+app.post('/simulate', async (req, res) => {
   try {
     const { drivers, startTime, maxHoursPerDay } = req.body;
     // Input validation
@@ -175,7 +297,7 @@ app.get('/simulation-history', async (req, res) => {
       typeof maxHoursPerDay !== "number" ||
       drivers <= 0 ||
       maxHoursPerDay <= 0 ||
-      drivers > 100
+      drivers > 100 
     ) {
       return res.status(400).json({
         error: {
@@ -233,7 +355,8 @@ app.get('/simulation-history', async (req, res) => {
       }
 
       // Update work hours for driver
-      driverWorkHours[driverIdx] += deliveryTime / 60;
+      driverWorkHours[driverIdx] += deliveryTime / 60; 
+
       // Late delivery penalty
       let isLate = deliveryTime > (baseDeliveryTime + 10);
       let penalty = isLate ? 50 : 0;
@@ -289,13 +412,18 @@ app.get('/simulation-history', async (req, res) => {
   }
 });
 
-// --- Error Handling ---
+// Error handling middleware
 app.use((err, req, res, next) => {
-  res.status(500).json({ error: err.message });
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something broke!' });
 });
 
-// --- Start Server ---
-const PORT = process.env.PORT || 4000;
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
 app.listen(PORT, () => {
-  console.log(`API server running on port ${PORT}`);
+  console.log(`Auth server running on http://localhost:${PORT}`);
 });
